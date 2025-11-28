@@ -32,6 +32,15 @@ func (m *MockAPIClient) GenerateContent(model, prompt string) (string, error) {
 	return "mocked response", nil
 }
 
+func (m *MockAPIClient) GenerateContentWithImage(model, prompt, imageBase64, mimeType string) (string, error) {
+	// For now, we can just delegate to the text-based mock.
+	// If image-specific tests are needed, this can be expanded.
+	if m.GenerateContentFunc != nil {
+		return m.GenerateContentFunc(model, prompt)
+	}
+	return "mocked response with image", nil
+}
+
 func TestInitialModel(t *testing.T) {
 	// Unset the API key to test the default case
 	os.Unsetenv("GEMINI_API_KEY")
@@ -131,14 +140,14 @@ func TestUpdate(t *testing.T) {
 			t.Fatalf("Expected 1 message, but got %d", len(updatedModel.messages))
 		}
 
-		if updatedModel.messages[0] != "Gemini: test response" {
-			t.Errorf("Expected message to be 'Gemini: test response', but got '%s'", updatedModel.messages[0])
+		if updatedModel.messages[0].content != "Gemini: test response" {
+			t.Errorf("Expected message to be 'Gemini: test response', but got '%s'", updatedModel.messages[0].content)
 		}
 	})
 
 		t.Run("KeyEnter in showChat", func(t *testing.T) {
 			m := initialModel()
-			m.textInput.SetValue("Hello Gemini")
+			m.textarea.SetValue("Hello Gemini")
 			client := &MockAPIClient{
 				GenerateContentFunc: func(model, prompt string) (string, error) {
 					return "response from model", nil
@@ -156,8 +165,8 @@ func TestUpdate(t *testing.T) {
 			if len(updatedModel.messages) != 1 {
 				t.Errorf("Expected 1 message after sending, got %d", len(updatedModel.messages))
 			}
-			if updatedModel.messages[0] != "You: Hello Gemini" {
-				t.Errorf("Expected message to be 'You: Hello Gemini', got '%s'", updatedModel.messages[0])
+			if updatedModel.messages[0].content != "You: Hello Gemini" {
+				t.Errorf("Expected message to be 'You: Hello Gemini', got '%s'", updatedModel.messages[0].content)
 			}
 
 			// Simulate API response
@@ -172,8 +181,8 @@ func TestUpdate(t *testing.T) {
 			if len(finalModel.messages) != 2 {
 				t.Errorf("Expected 2 messages after API response, got %d", len(finalModel.messages))
 			}
-			if finalModel.messages[1] != "Gemini: response from model" {
-				t.Errorf("Expected response message, got %s", finalModel.messages[1])
+			if finalModel.messages[1].content != "Gemini: response from model" {
+				t.Errorf("Expected response message, got %s", finalModel.messages[1].content)
 			}
 		})
 	}
