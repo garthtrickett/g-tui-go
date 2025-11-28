@@ -16,7 +16,7 @@ buildGoModule rec {
   # To get the vendorSha256 for new dependencies, run:
   # nix-build -A g-tui-go.vendorSha256
   # Or temporarily replace the hash with lib.fakeSha256 and build.
-  vendorSha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  vendorHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
   meta = with lib; {
     description = "A terminal UI for interacting with Google's Gemini models";
