@@ -1,0 +1,106 @@
+--- New API Call ---
+Model: gemini-3-pro-preview
+Prompt: ## Gemini Added Memories
+- The user wants to load the file ~/.config/Claude/claude_desktop_config.json when Gemini loads.
+
+
+write a file to the current dir called 42069.txt that has hello world in it
+URL: https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key=AIzaSyBpFv8Qi1I3X39wdEi4wN_mDGkY6azRzV8
+Request Body: {"contents":[{"parts":[{"text":"## Gemini Added Memories\n- The user wants to load the file ~/.config/Claude/claude_desktop_config.json when Gemini loads.\n\n\nwrite a file to the current dir called 42069.txt that has hello world in it"}]}],"tools":[{"function_declarations":[{"name":"writeFile","description":"Write a file to the local file system.","parameters":{"type":"object","properties":{"content":{"type":"string","description":"The content to write to the file."},"name":{"type":"string","description":"The name of the file to write."}},"required":["name","content"]}}]}]}
+Response Body: {
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "functionCall": {
+              "name": "writeFile",
+              "args": {
+                "content": "hello world",
+                "name": "42069.txt"
+              }
+            },
+            "thoughtSignature": "EtYDCtMDAXLI2nywU65RBKyDFK7pD8mYVAYoMCyNZAIZUC98mLP/SCLHGKV7OGa/CilPr5dmcafbQDNXGl67Ew5/+U/l7Cu38iq4VkbU378xEmVb7QcvS1LeRzpR66CxSABbJAClDGenN2fsTW8CicrKWO40Y4xq5aCQf+7onxh3sdQUPPjfmsDXemdOu+EOEcx/+BI68VkdKXRBo3SqXq/wYUOfgsAmUig2vaFZbmoEYa7+OvbZpQCSOT0LN5z8Zg46GBayle9Lqh8vsgYD9W9pP4V1HwRwSdTeivNPTvRAIvk+frNBgugYT0cEEeLN9hofBdJ/rdFcTO0EQxFGqZFRcayZ+UhkfHqEynsMP2QbJaBwI3oesINrqDh+29edEc5q/9Wy1EF9QCGWx9zPunt6MbGOZYhjw+TpZIgA2fvYldXduYJdINrTj97Qp3DHZ1bEnYv/QT2/c1dpVYc1xHek8LyPkfdwD29Tulk6PuachbFTA1KVj5Up0gVScaWoW931F7Wr8J4RjSCLCu4rUaPov9+Kra5APblEu8OICcfX8lrzzfYTfSNcQxQbS1hQYEn10sY8Z/cbchBC7JBQuyHY/xIOoMYvSgTnDxZB17b14aN7ScQwbmc="
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0,
+      "finishMessage": "Model generated function call(s)."
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 135,
+    "candidatesTokenCount": 27,
+    "totalTokenCount": 272,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 135
+      }
+    ],
+    "thoughtsTokenCount": 110
+  },
+  "modelVersion": "gemini-3-pro-preview",
+  "responseId": "rKopaebXCNbi2roPx6mP2Ao"
+}
+
+API Response Part: {Text: InlineData:<nil> FunctionCall:<nil> FunctionResponse:<nil>}
+Part.FunctionCall is nil: true
+Success. Response text: 
+Ctrl-C pressed
+--- New API Call ---
+Model: gemini-3-pro-preview
+Prompt: ## Gemini Added Memories
+- The user wants to load the file ~/.config/Claude/claude_desktop_config.json when Gemini loads.
+
+
+write a file to the current dir called "hello-world.txt" containing 42069
+URL: https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key=AIzaSyBpFv8Qi1I3X39wdEi4wN_mDGkY6azRzV8
+Request Body: {"contents":[{"parts":[{"text":"## Gemini Added Memories\n- The user wants to load the file ~/.config/Claude/claude_desktop_config.json when Gemini loads.\n\n\nwrite a file to the current dir called \"hello-world.txt\" containing 42069"}]}],"tools":[{"function_declarations":[{"name":"writeFile","description":"Write a file to the local file system.","parameters":{"type":"object","properties":{"content":{"type":"string","description":"The content to write to the file."},"name":{"type":"string","description":"The name of the file to write."}},"required":["name","content"]}}]}]}
+Response Body: {
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "functionCall": {
+              "name": "writeFile",
+              "args": {
+                "name": "hello-world.txt",
+                "content": "42069"
+              }
+            },
+            "thoughtSignature": "EooICocIAXLI2nyDmRoCFIb3tw+crlfTj3zKSgj8CW1DKjYGkzfwPIARytOGwWyplgTw6/T8FlKW2NRUJPDow8Lz7+ggyjv4BDPGnj0sGR61vz+sZqB4vC388vK++I0Ce/rDsONp5FkwwFt81GR6WVTqbFEKp0K1WZVL01kiaesqns4aCxk6U/O5Lqqv5vPrLeCxYvbYWhJ36GdsMfhCS9GOE1HJy2ltcAPzyhbHnWwlUrMZiJ9ndGvvqtshZxMC2NQoyZ5pWTIXpog/n1q0a+tVMAV5/fCMss4EbgrtckzUpzWrIEIuEqEMUTy6xXFCSUi5VXcnHRtr/8nAhiNY6koFEM8H5WF+9ARhipEfYESytu0oHoY7oolcoP0+nzyDPkvR/c9NeUSmAbm+4aS8H9w3x3kvTT5ebHR6UAmumxvIA0MeVZqWLTsaphJp3kuncIq11TGoLzFz9qpiV5+2odKLAxKiQPTGJaJdOlJvRsjj2XuXhMiFqLW1wFuhgWoCHUTwKfGo6sotvsHLji9vArtbUjm9kRwvX6bFnH65+droKx85HD4AP8wlW5o/0I31JcPQGtcTokqKE8xuNkqM+/b16TBglL+WFVnpi4y1Awa3auaLQe/iQ3UuILMY2pfYV/arYxZz4rGeAxA5BHtqPW6z88he8GtbHVmFDE6xeAvj/zjMbEXn3zIfWdUzayhRPB3u2S8sEqIt6vqJ980EzhqGyyRL0fSXUNurFTOcsSiwgq0fHJN20mY5C4YYyVLeCWCWIOF5P1Lm53U4LDl5FzLQI5LpMS6v2HW7bmy6ZbJ+Y+0n9gpD+mSiNhPyjcq3/lJu8s+AJubJp4uMoI3g84cKQw/xpAibgIs5yVltyjjVHf61/teRghs4naJ6qvglkgFX9vOZa/ICylfBa6XLqjUyoRbwmmOP38FvJehKezW6pk2B4IY6VpCWhz7FfT1uGh3lNE3Fq/Y4KmdoOX98Zx3TTQFInHfZhqnO5fN00kQpRzFm5Y63joQY2+2MCmJdTtC/6PN1zL6UlbnoItnbSiG5NSdKcB0XFZKDQqCZQbg5HBcBo/xLFQvYoVgKYc2041jPnJRIo5LVPIcPFIaygpXUikWi/cCDy+6npHL4DIpsy3kABxxu3KjT5bo/fa3dkdkscUJvJceWuUJeGFUBUStBiRuNawmZJeYf1vDygOfQEQ6xPR/BV3fgTspPK7QrV2BRSvChI9X8xbjnVKuUoCg/eruZcMHK9tjNdSscY1obDgDYyXvTlHfFLJWIjjWjvYHIRVG0R9VixTyJZkSa7GHzpXo99a3MgYhHex0082WvwQkEgH7xXGYglzuExVVy/tx4Hsh58B8MDlr/TYia6GmjGDWRveQ4N9XN69o="
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0,
+      "finishMessage": "Model generated function call(s)."
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 135,
+    "candidatesTokenCount": 28,
+    "totalTokenCount": 411,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 135
+      }
+    ],
+    "thoughtsTokenCount": 248
+  },
+  "modelVersion": "gemini-3-pro-preview",
+  "responseId": "OKspaeH4NP-Z0-kPyuu6qAo"
+}
+
+API Response Part: {Text: InlineData:<nil> FunctionCall:0x400117c288 FunctionResponse:<nil>}
+Part.FunctionCall is nil: false
+FunctionCall detected.
+writeFile function call detected.
+Type assertion for name: true, content: true
+Attempting to write file 'hello-world.txt' with content '42069'
