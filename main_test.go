@@ -53,8 +53,8 @@ func TestInitialModel(t *testing.T) {
 			t.Errorf("Expected state to be showChat, but got %v", model.state)
 		}
 
-		if model.selectedModel != "gemini-3-pro-preview" {
-			t.Errorf("Expected selectedModel to be \"gemini-3-pro-preview\", but got %s", model.selectedModel)
+		if model.selectedModel != "gemini-2.5-pro" {
+			t.Errorf("Expected selectedModel to be \"gemini-2.5-pro\", but got %s", model.selectedModel)
 		}
 	})
 
@@ -69,8 +69,8 @@ func TestInitialModel(t *testing.T) {
 			t.Errorf("Expected state to be showChat, but got %v", model.state)
 		}
 
-		if model.selectedModel != "gemini-3-pro-preview" {
-			t.Errorf("Expected selectedModel to be \"gemini-3-pro-preview\", but got %s", model.selectedModel)
+		if model.selectedModel != "gemini-2.5-pro" {
+			t.Errorf("Expected selectedModel to be \"gemini-2.5-pro\", but got %s", model.selectedModel)
 		}
 	})
 
