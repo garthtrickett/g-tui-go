@@ -129,7 +129,7 @@ func initialModel() model {
 			textarea: ta,
 			spinner:   s,
 			client:    client,
-			selectedModel: "gemini-3-pro-preview",
+			selectedModel: "gemini-2.5-pro",
 			loading:   false,
 			loadedFileContent:   "",
 			yoloModeContent: "",
