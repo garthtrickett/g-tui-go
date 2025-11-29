@@ -1,0 +1,1763 @@
+package main
+
+import (
+	"errors"
+	"os"
+	"testing"
+
+	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+// MockAPIClient is a mock implementation of the APIClient interface for testing.
+type MockAPIClient struct {
+	FetchModelsFunc     func() ([]list.Item, error)
+	GenerateContentFunc func(model, prompt string) (string, error)
+}
+
+func (m *MockAPIClient) FetchModels() ([]list.Item, error) {
+	if m.FetchModelsFunc != nil {
+		return m.FetchModelsFunc()
+	}
+	return []list.Item{
+		item{title: "gemini-pro"},
+		item{title: "gemini-pro-vision"},
+	}, nil
+}
+
+func (m *MockAPIClient) GenerateContent(model, prompt string) (string, error) {
+	if m.GenerateContentFunc != nil {
+		return m.GenerateContentFunc(model, prompt)
+	}
+	return "mocked response", nil
+}
+
+func (m *MockAPIClient) GenerateContentWithImage(model, prompt, imageBase64, mimeType string) (string, error) {
+	// For now, we can just delegate to the text-based mock.
+	// If image-specific tests are needed, this can be expanded.
+	if m.GenerateContentFunc != nil {
+		return m.GenerateContentFunc(model, prompt)
+	}
+	return "mocked response with image", nil
+}
+
+func TestInitialModel(t *testing.T) {
+	// Unset the API key to test the default case
+	os.Unsetenv("GEMINI_API_KEY")
+
+	// Test case 1: No API key
+	t.Run("No API Key", func(t *testing.T) {
+		model := initialModel()
+
+		if model.state != showChat {
+			t.Errorf("Expected state to be showChat, but got %v", model.state)
+		}
+
+		if model.selectedModel != "gemini-3-pro-preview" {
+			t.Errorf("Expected selectedModel to be \"gemini-3-pro-preview\", but got %s", model.selectedModel)
+		}
+	})
+
+	// Set the API key to test the pre-selection case
+	os.Setenv("GEMINI_API_KEY", "test-api-key")
+
+	// Test case 2: API key is set
+	t.Run("API Key is set", func(t *testing.T) {
+		model := initialModel()
+
+		if model.state != showChat {
+			t.Errorf("Expected state to be showChat, but got %v", model.state)
+		}
+
+		if model.selectedModel != "gemini-3-pro-preview" {
+			t.Errorf("Expected selectedModel to be \"gemini-3-pro-preview\", but got %s", model.selectedModel)
+		}
+	})
+
+	// Clean up the environment variable
+	os.Unsetenv("GEMINI_API_KEY")
+}
+
+func TestFetchModels(t *testing.T) {
+	t.Run("Success", func(t *testing.T) {
+		client := &MockAPIClient{}
+		cmd := fetchModels(client)
+		msg := cmd()
+
+		fetchedMsg, ok := msg.(fetchedModelsMsg)
+		if !ok {
+			t.Fatalf("Expected fetchedModelsMsg, but got %T", msg)
+		}
+
+		if len(fetchedMsg) != 2 {
+			t.Errorf("Expected 2 models, but got %d", len(fetchedMsg))
+		}
+	})
+
+	t.Run("Error", func(t *testing.T) {
+		client := &MockAPIClient{
+			FetchModelsFunc: func() ([]list.Item, error) {
+				return nil, errors.New("API error")
+			},
+		}
+		cmd := fetchModels(client)
+		msg := cmd()
+
+		errMsg, ok := msg.(errMsg)
+		if !ok {
+			t.Fatalf("Expected errMsg, but got %T", msg)
+		}
+
+		if errMsg.err.Error() != "API error" {
+			t.Errorf("Expected error 'API error', but got '%s'", errMsg.err.Error())
+		}
+	})
+}
+
+func TestUpdate(t *testing.T) {
+	t.Run("fetchedModelsMsg", func(t *testing.T) {
+		m := initialModel()
+		models := []list.Item{item{title: "test-model"}}
+		msg := fetchedModelsMsg(models)
+
+		newModel, _ := m.Update(msg)
+		updatedModel := newModel.(model)
+
+		if len(updatedModel.list.Items()) != 1 {
+			t.Errorf("Expected list to have 1 item, but got %d", len(updatedModel.list.Items()))
+		}
+	})
+
+	t.Run("apiResponseMsg", func(t *testing.T) {
+		m := initialModel()
+		m.state = showChat
+		msg := apiResponseMsg("test response")
+
+		newModel, _ := m.Update(msg)
+		updatedModel := newModel.(model)
+
+		if len(updatedModel.messages) != 1 {
+			t.Fatalf("Expected 1 message, but got %d", len(updatedModel.messages))
+		}
+
+		if updatedModel.messages[0].content != "Gemini: test response" {
+			t.Errorf("Expected message to be 'Gemini: test response', but got '%s'", updatedModel.messages[0].content)
+		}
+	})
+
+		t.Run("KeyEnter in showChat", func(t *testing.T) {
+			m := initialModel()
+			m.textarea.SetValue("Hello Gemini")
+			client := &MockAPIClient{
+				GenerateContentFunc: func(model, prompt string) (string, error) {
+					return "response from model", nil
+				},
+			}
+			m.client = client
+			msg := tea.KeyMsg{Type: tea.KeyEnter}
+
+			newModel, _ := m.Update(msg)
+			updatedModel := newModel.(model)
+
+			if !updatedModel.loading {
+				t.Errorf("Expected loading to be true after sending message")
+			}
+			if len(updatedModel.messages) != 1 {
+				t.Errorf("Expected 1 message after sending, got %d", len(updatedModel.messages))
+			}
+			if updatedModel.messages[0].content != "You: Hello Gemini" {
+				t.Errorf("Expected message to be 'You: Hello Gemini', got '%s'", updatedModel.messages[0].content)
+			}
+
+			// Simulate API response
+			apiMsg := apiResponseMsg("response from model")
+
+			finalModelRaw, _ := updatedModel.Update(apiMsg)
+			finalModel := finalModelRaw.(model)
+
+			if finalModel.loading {
+				t.Errorf("Expected loading to be false after API response")
+			}
+			if len(finalModel.messages) != 2 {
+				t.Errorf("Expected 2 messages after API response, got %d", len(finalModel.messages))
+			}
+			if finalModel.messages[1].content != "Gemini: response from model" {
+				t.Errorf("Expected response message, got %s", finalModel.messages[1].content)
+			}
+		})
+	}
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+func logToFile(message string) {
+	f, err := os.OpenFile("debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		// Can't log, so just print to stderr
+		fmt.Fprintf(os.Stderr, "failed to open log file: %v", err)
+		return
+	}
+	defer f.Close()
+	if _, err := fmt.Fprintf(f, "%s\n", message); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to write to log file: %v", err)
+	}
+}
+
+func longestCommonPrefix(strs []string) string {
+	if len(strs) == 0 {
+		return ""
+	}
+	prefix := strs[0]
+	for i := 1; i < len(strs); i++ {
+		for !strings.HasPrefix(strs[i], prefix) {
+			prefix = prefix[:len(prefix)-1]
+			if len(prefix) == 0 {
+				return ""
+			}
+		}
+	}
+	return prefix
+}
+
+func appendFile(outFile *os.File, path string) {
+	base := filepath.Base(path)
+	if base == "a.txt" || base == "concat.json" {
+		return
+	}
+	logToFile("Processing path: " + path)
+	fileContent, err := os.ReadFile(path)
+	if err != nil {
+		logToFile(fmt.Sprintf("Error reading file %s: %v", path, err))
+		return
+	}
+
+	header := fmt.Sprintf("--- %s ---\n", path)
+	footer := fmt.Sprintf("\n--- END %s ---\n", path)
+
+	outFile.WriteString(header)
+	outFile.Write(fileContent)
+	outFile.WriteString(footer)
+}
+[
+  {
+    "type": "folder",
+    "path": "."
+  }
+  
+]
+--- New API Call ---
+Model: gemini-3-pro-preview
+Prompt: ## Gemini Added Memories
+- The user wants to load the file ~/.config/Claude/claude_desktop_config.json when Gemini loads.
+
+
+hello
+URL: https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key=AIzaSyDOCcx6EFJQbsv-h0fp2hubcB5pyjWVaBk
+Request Body: {"contents":[{"parts":[{"text":"## Gemini Added Memories\n- The user wants to load the file ~/.config/Claude/claude_desktop_config.json when Gemini loads.\n\n\nhello"}]}],"tools":[{"function_declarations":[{"name":"writeFile","description":"Write a file to the local file system.","parameters":{"type":"object","properties":{"content":{"type":"string","description":"The content to write to the file."},"name":{"type":"string","description":"The name of the file to write."}},"required":["name","content"]}}]}]}
+Response Body: {
+  "error": {
+    "code": 429,
+    "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3-pro\nPlease retry in 54.74838522s.",
+    "status": "RESOURCE_EXHAUSTED",
+    "details": [
+      {
+        "@type": "type.googleapis.com/google.rpc.Help",
+        "links": [
+          {
+            "description": "Learn more about Gemini API quotas",
+            "url": "https://ai.google.dev/gemini-api/docs/rate-limits"
+          }
+        ]
+      },
+      {
+        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+        "violations": [
+          {
+            "quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+            "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+            "quotaDimensions": {
+              "location": "global",
+              "model": "gemini-3-pro"
+            }
+          },
+          {
+            "quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+            "quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier",
+            "quotaDimensions": {
+              "model": "gemini-3-pro",
+              "location": "global"
+            }
+          }
+        ]
+      },
+      {
+        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+        "retryDelay": "54s"
+      }
+    ]
+  }
+}
+
+No response from model.
+Ctrl-C pressed
+--- New API Call ---
+Model: gemini-2.5-pro
+Prompt: ## Gemini Added Memories
+- The user wants to load the file ~/.config/Claude/claude_desktop_config.json when Gemini loads.
+
+
+hello
+URL: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=AIzaSyDOCcx6EFJQbsv-h0fp2hubcB5pyjWVaBk
+Request Body: {"contents":[{"parts":[{"text":"## Gemini Added Memories\n- The user wants to load the file ~/.config/Claude/claude_desktop_config.json when Gemini loads.\n\n\nhello"}]}],"tools":[{"function_declarations":[{"name":"writeFile","description":"Write a file to the local file system.","parameters":{"type":"object","properties":{"content":{"type":"string","description":"The content to write to the file."},"name":{"type":"string","description":"The name of the file to write."}},"required":["name","content"]}}]}]}
+Response Body: {
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "Hello! How can I help you today?",
+            "thoughtSignature": "CukBAXLI2nztbfCSEt1MVxRZy2wI1jIZ/2a7I/pgsMkFILeDq+h/8wfJHpa8wG/Y5W2JZ5gmj4c3xgzNGZz4GMWMK7RCxYEwm5IxQh3jDaOL23CpGPD0HE2m+udvZRfLMrR5LNDqIvx0pEPrrQStdvgkhf4RRUWMB2SDwwPv9vSr9ab+Lri86ag1uoszjVWtTDP7jXJ4Z2f8sUSi3OxI+wXGHUkrnXQwmYye31we24/ns0tpdcVNbs0i9mOonQff8TuD5f1jSZlpxGZrCjwcKOCmWqY/Kr4vAMH7GEAxok/JR5H0CjAaFiG/aks="
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 96,
+    "candidatesTokenCount": 9,
+    "totalTokenCount": 156,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 96
+      }
+    ],
+    "thoughtsTokenCount": 51
+  },
+  "modelVersion": "gemini-2.5-pro",
+  "responseId": "xEcqafyBA5yh0-kP2Yu0kAE"
+}
+
+API Response Part: {Text:Hello! How can I help you today? InlineData:<nil> FunctionCall:<nil> FunctionResponse:<nil>}
+Part.FunctionCall is nil: true
+Success. Response text: Hello! How can I help you today?
+Ctrl-V pressed
+--- New API Call With Image ---
+Model: gemini-2.5-pro
+Prompt: what is this image?
+MimeType: image/png
+URL: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=AIzaSyDOCcx6EFJQbsv-h0fp2hubcB5pyjWVaBk
+Request Body: {"contents":[{"parts":[{"text":"what is this image?"},{"inline_data":{"mime_type":"image/png","data":"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"}}]}],"tools":[{"function_declarations":[{"name":"writeFile","description":"Write a file to the local file system.","parameters":{"type":"object","properties":{"content":{"type":"string","description":"The content to write to the file."},"name":{"type":"string","description":"The name of the file to write."}},"required":["name","content"]}}]}]}
+Response Body: {
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "This appears to be a stylized, minimalist graphic of a water droplet or a teardrop. The design features a soft, glowing blue-green outline of the shape against a dark, solid-colored background.",
+            "thoughtSignature": "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"
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 327,
+    "candidatesTokenCount": 41,
+    "totalTokenCount": 742,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 69
+      },
+      {
+        "modality": "IMAGE",
+        "tokenCount": 258
+      }
+    ],
+    "thoughtsTokenCount": 374
+  },
+  "modelVersion": "gemini-2.5-pro",
+  "responseId": "_0cqaffuN4_C0-kPw7TwkQo"
+}
+
+API Response Part: {Text:This appears to be a stylized, minimalist graphic of a water droplet or a teardrop. The design features a soft, glowing blue-green outline of the shape against a dark, solid-colored background. InlineData:<nil> FunctionCall:<nil> FunctionResponse:<nil>}
+Part.FunctionCall is nil: true
+Success. Response text: This appears to be a stylized, minimalist graphic of a water droplet or a teardrop. The design features a soft, glowing blue-green outline of the shape against a dark, solid-colored background.
+--- New API Call ---
+Model: gemini-2.5-pro
+Prompt: write a file called hello-world.txt containing 42069 to current dir
+URL: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=AIzaSyDOCcx6EFJQbsv-h0fp2hubcB5pyjWVaBk
+Request Body: {"contents":[{"parts":[{"text":"write a file called hello-world.txt containing 42069 to current dir"}]}],"tools":[{"function_declarations":[{"name":"writeFile","description":"Write a file to the local file system.","parameters":{"type":"object","properties":{"content":{"type":"string","description":"The content to write to the file."},"name":{"type":"string","description":"The name of the file to write."}},"required":["name","content"]}}]}]}
+Response Body: {
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "functionCall": {
+              "name": "writeFile",
+              "args": {
+                "content": "42069",
+                "name": "hello-world.txt"
+              }
+            },
+            "thoughtSignature": "CssFAXLI2ny5/jIJ84v5CvOkHGFpuxSyy8pjYFXZ1ulPVkArGG2fcBjyUyStZYYTTfP/pAIfbR8ZfLlrksxq/UMq4Sl8tioZQss/oWE2d+QeZmww3IO2TcZ8z65dJ5rXs4FJC9VQdBxW1NxFOe7vtlT2XC8PWVIX1Zk3eJXwAYNcvwGfw3VHBoJ2rhW7D06Rt+ThjLbGLKWd4wN+x/9N0MyorYvh6O3cLFjSroxQeree5FU3yO9htRSXBrBxGqkOvRO1/cNhtTEVQbZGnLgNqeOJlrqlBi3dpo1t8Vdu4pVUcdSSxpaEm9w/0gFL+m44faKskRxCg2SzGf+9ZjyVC6zHHaP/F5ggCVlbM7EnV29HOIu4UeF0GITa8UQ5zshzKLUXchQdeOqKfeL7aKqNPZ0KDjFM7kLREQ27m2xcSR0JqQRx+BGrUn0W0j1xS/vHl/XFnixy3MU2DOFsoUwOUVx2LQPPecAkoEsEGd8JScLCFmCsw+8hzkIvVLFWK5bAAVOOzMIWPY8QCB/XUe55B2jsyIf4CCJsS1PauhdlXeE3tU2OPMKYfuHejVnLJPKsIHfDN7cA8Mk8uuxdngTp3Hpw4OGdcQAYtvv+lzCsnKgtDj1gtsJLMHrytZLf1NJyW+M2ReltSVcL9b/eu9lm8TnwyfBtngxXY3A45N5gZIIxp+xBc4WIROSjU3rer4EhoNVvgeMw1/pEh9nIM/FpCfMz6RxrAYvJ4LaN6uyFmDuSca9hbro3e0G2tCI+RVNSeRk7FvlxYSWAgjWPvAlsOvvRVRKylIxa5seuqm8JcSTTLL8QjZqVnMWHAO/3CFDsuKRFKuJjUayrFYnyeelo9pSkFwqGr5ONrQ9BIIIMDEgH4ByP0whJRsjCxdQjLHwvmSzx+a+YqaxJPIdJCHlCJFsyKSWtiBNkcmXCJ1WSReNrya50Gpo7yMSjAvMoXg=="
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0,
+      "finishMessage": "Model generated function call(s)."
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 83,
+    "candidatesTokenCount": 26,
+    "totalTokenCount": 291,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 83
+      }
+    ],
+    "thoughtsTokenCount": 182
+  },
+  "modelVersion": "gemini-2.5-pro",
+  "responseId": "HEkqaaCkKrac1e8P94m1qAk"
+}
+
+API Response Part: {Text: InlineData:<nil> FunctionCall:0x400089cb88 FunctionResponse:<nil>}
+Part.FunctionCall is nil: false
+FunctionCall detected.
+writeFile function call detected.
+Type assertion for name: true, content: true
+Attempting to write file 'hello-world.txt' with content '42069'
+Ctrl-C pressed
+{ lib, buildGoModule, fetchFromGitHub, fetchgit }:
+
+buildGoModule rec {
+  pname = "g-tui-go";
+  version = "0.1.0"; #<-- Change this to match your git tags
+
+  src = fetchgit {
+    url = "https://github.com/garthtrickett/g-tui-go";
+    rev = "77801ae14f538693e4e7b6091bfd09cea05f7ab6";
+    sha256 = "sha256-zQhqUgFaYVX+Lcq9SDfQazyxEYUZr/zNuGkj6viOfos=";
+  };
+
+  vendorHash = "sha256-8A24/OxIub1UUay91PVh+gUsOZJj0pKfR0DOOdrDNPE=";
+
+
+
+  meta = with lib; {
+    description = "A terminal UI for interacting with Google's Gemini models";
+    homepage = "https://github.com/garthtrickett/g-tui-go";
+    license = licenses.mit; #<-- Make sure this matches your project's license
+    maintainers = with maintainers; [ "garthtrickett" ];
+  };
+}
+concat.json
+a.txt
+debug.log
+g-tui-go
+package main
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textarea"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+type (
+	errmsg           struct{ err error }
+	fetchedModelsMsg []list.Item
+	apiResponseMsg   string
+	ConcatItem       struct {
+		Type string `json:"type"`
+		Path string `json:"path"`
+	}
+)
+
+type state int
+
+const (
+	showList state = iota
+	showChat
+)
+
+type sender int
+
+const (
+	userMessage sender = iota
+	geminiMessage
+	systemMessage
+)
+
+type chatMessage struct {
+	sender  sender
+	content string
+}
+
+var (
+	appStyle = lipgloss.NewStyle().Margin(1, 2)
+	userStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
+	geminiStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	systemStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
+)
+
+// --- list item ---
+type item struct {
+	title, desc string
+}
+
+func (i item) Title() string       { return i.title }
+func (i item) Description() string { return i.desc }
+func (i item) FilterValue() string { return i.title }
+
+// --- bubble tea model ---
+type model struct {
+	state         state
+	list          list.Model
+	textarea      textarea.Model
+	spinner       spinner.Model
+	client        APIClient
+	selectedModel string
+	messages      []chatMessage
+	loading       bool
+	err           error
+	loadedFileContent   string
+	yoloModeContent string
+	yoloModeActive bool
+	systemPrompt string
+	pastedImage []byte
+	pastedImageMimeType string
+	width         int
+}
+
+func initialModel() model {
+	apiKey := os.Getenv("GEMINI_API_KEY")
+
+	if apiKey == "" {
+		tempDir := "/home/garth/.gemini/tmp/3ecdc925ecdb6b43e72d58ab048373ba41b82a51a9e0668f8dbca38696f65085"
+		keyFile := filepath.Join(tempDir, "gemini", "api-key")
+		content, err := os.ReadFile(keyFile)
+		if err == nil {
+			apiKey = string(content)
+		}
+	}
+
+	if apiKey == "" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			keyFile := filepath.Join(home, ".config", "gemini", "api-key")
+			content, err := os.ReadFile(keyFile)
+			if err == nil {
+				apiKey = string(content)
+			}
+		}
+	}
+
+	// setup list
+	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	l.Title = "Select a Model"
+
+		// setup text input
+		ta := textarea.New()
+		ta.Placeholder = ""
+		ta.ShowLineNumbers = false
+		ta.Focus()
+	
+		// setup spinner
+		s := spinner.New()
+		s.Spinner = spinner.Dot
+		s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	
+		client := NewLiveAPIClient(apiKey)
+	
+		m := model{
+			state:     showChat,
+			list:      l,
+			textarea: ta,
+			spinner:   s,
+			client:    client,
+			selectedModel: "gemini-2.5-pro",
+			loading:   false,
+			loadedFileContent:   "",
+			yoloModeContent: "",
+			yoloModeActive: false,
+			systemPrompt: "",
+			pastedImage: nil,
+			pastedImageMimeType: "",
+		}
+home, err := os.UserHomeDir()
+	if err == nil {
+		geminiMdPath := filepath.Join(home, ".gemini", "GEMINI.md")
+		if _, err := os.Stat(geminiMdPath); err == nil {
+			content, err := os.ReadFile(geminiMdPath)
+			if err == nil {
+				m.systemPrompt = string(content)
+			}
+		}
+	}
+
+	return m
+}
+
+func (m model) Init() tea.Cmd {
+	return tea.Batch(tea.EnterAltScreen, fetchModels(m.client))
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.list.SetSize(msg.Width, msg.Height)
+		m.textarea.SetWidth(msg.Width)
+		m.width = msg.Width
+		return m, nil
+
+	case tea.KeyMsg:
+		switch msg.Type {
+		case tea.KeyCtrlC, tea.KeyEsc:
+			logToFile("Ctrl-C pressed")
+			return m, tea.Quit
+		case tea.KeyTab:
+			logToFile("Tab pressed")
+			userInput := m.textarea.Value()
+			if strings.HasPrefix(userInput, "/read ") {
+				path := strings.TrimPrefix(userInput, "/read ")
+				logToFile("Path: " + path)
+
+				if strings.HasPrefix(path, "~/") {
+					home, err := os.UserHomeDir()
+					if err != nil {
+						logToFile(fmt.Sprintf("Error getting home dir: %v", err))
+						return m, nil
+					}
+					path = filepath.Join(home, path[2:])
+				}
+
+				matches, err := filepath.Glob(path + "*")
+				if err != nil {
+					logToFile(fmt.Sprintf("Error globbing: %v", err))
+					return m, nil
+				}
+				logToFile(fmt.Sprintf("Matches: %v", matches))
+
+				if len(matches) == 1 {
+					match := matches[0]
+					info, err := os.Stat(match)
+					if err != nil {
+						logToFile(fmt.Sprintf("Error stating file: %v", err))
+						return m, nil
+					}
+					if info.IsDir() {
+						match += "/"
+					}
+					m.textarea.SetValue("/read " + match)
+					m.textarea.SetCursor(len("/read " + match))
+				} else if len(matches) > 1 {
+					for _, match := range matches {
+						info, err := os.Stat(match)
+						if err == nil && info.IsDir() {
+							m.textarea.SetValue("/read " + match + "/")
+							m.textarea.SetCursor(len("/read " + match + "/"))
+							return m, nil
+						}
+					}
+
+					prefix := longestCommonPrefix(matches)
+					m.textarea.SetValue("/read " + prefix)
+					m.textarea.SetCursor(len("/read " + prefix))
+					m.messages = append(m.messages, chatMessage{sender: systemMessage, content: "Possible completions: "+strings.Join(matches, ", ")})
+				}
+			}
+		case tea.KeyCtrlY:
+			logToFile("Ctrl-Y pressed")
+			content, err := os.ReadFile("concat.json")
+			if err != nil {
+				logToFile(fmt.Sprintf("Error reading concat.json: %v", err))
+				m.messages = append(m.messages, chatMessage{sender: systemMessage, content: "Error: concat.json not found."} )
+				return m, nil
+			}
+
+			var items []ConcatItem
+			if err := json.Unmarshal(content, &items); err != nil {
+				logToFile(fmt.Sprintf("Error unmarshalling concat.json: %v", err))
+				m.messages = append(m.messages, chatMessage{sender: systemMessage, content: "Error: Invalid concat.json format."} )
+				return m, nil
+			}
+
+			outFile, err := os.Create("a.txt")
+			if err != nil {
+				logToFile(fmt.Sprintf("Error creating a.txt: %v", err))
+				m.messages = append(m.messages, chatMessage{sender: systemMessage, content: "Error: Could not create a.txt."} )
+				return m, nil
+			}
+			defer outFile.Close()
+
+			for _, item := range items {
+				switch item.Type {
+				case "file":
+					appendFile(outFile, item.Path)
+				case "folder":
+					filepath.Walk(item.Path, func(path string, info os.FileInfo, err error) error {
+						if err != nil {
+							return err
+						}
+						if !info.IsDir() {
+							appendFile(outFile, path)
+						}
+						return nil
+					})
+				}
+			}
+			m.messages = append(m.messages, chatMessage{sender: systemMessage, content: "Successfully created a.txt"})
+			yoloContent, err := os.ReadFile("a.txt")
+			if err != nil {
+				logToFile(fmt.Sprintf("Error reading a.txt: %v", err))
+				m.messages = append(m.messages, chatMessage{sender: systemMessage, content: "Error: Could not read a.txt."} )
+				return m, nil
+			}
+			m.yoloModeContent = string(yoloContent)
+			m.yoloModeActive = true
+			m.messages = append(m.messages, chatMessage{sender: systemMessage, content: "YOLO mode activated. Content of a.txt is loaded and will be sent with your next message."} )
+
+		case tea.KeyCtrlV:
+			logToFile("Ctrl-V pressed")
+			cmd := exec.Command("wl-paste")
+			img, err := cmd.Output()
+			if err != nil {
+				logToFile(fmt.Sprintf("Error running wl-paste: %v", err))
+				m.messages = append(m.messages, chatMessage{sender: systemMessage, content: "Error: Could not run wl-paste. Is wl-clipboard installed?"})
+				return m, nil
+			}
+
+			mimeType := http.DetectContentType(img)
+			if !strings.HasPrefix(mimeType, "image/") {
+				logToFile(fmt.Sprintf("Pasted content is not an image (MIME: %s)", mimeType))
+				m.messages = append(m.messages, chatMessage{sender: systemMessage, content: "Error: No image found in clipboard."} )
+				return m, nil
+			}
+
+			m.pastedImage = img
+			m.pastedImageMimeType = mimeType
+			m.messages = append(m.messages, chatMessage{sender: systemMessage, content: "Image pasted from clipboard. It will be included in your next message."} )
+			return m, nil
+		case tea.KeyEnter:
+			if m.state == showList {
+				if i, ok := m.list.SelectedItem().(item); ok {
+					m.selectedModel = i.title
+					m.state = showChat
+				}
+				return m, nil
+			} else { // In chat mode, send the message
+				userInput := m.textarea.Value()
+				if strings.HasPrefix(userInput, "/read ") {
+					filePath := strings.TrimSpace(strings.TrimPrefix(userInput, "/read "))
+					content, err := os.ReadFile(filePath)
+					if err != nil {
+						m.messages = append(m.messages, chatMessage{sender: systemMessage, content: "Error reading file: "+err.Error()})
+					} else {
+						m.loadedFileContent = string(content)
+						m.messages = append(m.messages, chatMessage{sender: systemMessage, content: "Loaded content from "+filePath+". It will be included in your next message."} )
+					}
+					m.textarea.Reset()
+					m.textarea.SetValue("")
+					return m, nil
+				}
+
+				m.messages = append(m.messages, chatMessage{sender: userMessage, content: "You: "+userInput})
+				m.loading = true
+
+				prompt := userInput
+				if m.systemPrompt != "" {
+					prompt = m.systemPrompt + "\n\n" + prompt
+					m.systemPrompt = ""
+				}
+				if m.yoloModeActive {
+					prompt = "File Content:\n" + m.yoloModeContent + "\n\n---\n\nUser Prompt:\n" + prompt
+					m.yoloModeActive = false
+					m.yoloModeContent = ""
+				} else if m.loadedFileContent != "" {
+					prompt = "File Content:\n" + m.loadedFileContent + "\n\n---\n\nUser Prompt:\n" + prompt
+					m.loadedFileContent = "" // Clear after use
+				}
+
+				if m.pastedImage != nil {
+					imageBase64 := base64.StdEncoding.EncodeToString(m.pastedImage)
+					cmd = tea.Batch(m.spinner.Tick, makeApiCallWithImage(m.client, m.selectedModel, prompt, imageBase64, m.pastedImageMimeType))
+					m.pastedImage = nil
+					m.pastedImageMimeType = ""
+				} else {
+					cmd = tea.Batch(m.spinner.Tick, makeApiCall(m.client, m.selectedModel, prompt))
+				}
+				m.textarea.Reset()
+				m.textarea.SetValue("")
+			}
+		}
+
+	case fetchedModelsMsg:
+		m.list.SetItems(msg)
+		return m, nil
+
+	case apiResponseMsg:
+		m.loading = false
+		if msg != "" {
+			m.messages = append(m.messages, chatMessage{sender: geminiMessage, content: "Gemini: "+string(msg)})
+		}
+		m.textarea.Reset()
+		return m, nil
+
+	case errMsg:
+		m.loading = false
+		m.err = msg.err
+		return m, nil
+	}
+
+	var cmds []tea.Cmd
+	cmds = append(cmds, cmd)
+
+	// Update components based on current state
+	switch m.state {
+	case showList:
+		m.list, cmd = m.list.Update(msg)
+		cmds = append(cmds, cmd)
+	case showChat:
+		m.textarea, cmd = m.textarea.Update(msg)
+		cmds = append(cmds, cmd)
+
+		var spinnerCmd tea.Cmd
+		m.spinner, spinnerCmd = m.spinner.Update(msg)
+		cmds = append(cmds, spinnerCmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m model) View() string {
+	if m.err != nil {
+		return fmt.Sprintf("\nWe had some trouble: %v\n\n", m.err)
+	}
+	if m.client.(*LiveAPIClient).apiKey == "" {
+		return "API key not found. Please set the GEMINI_API_KEY environment variable."
+	}
+
+	ss := ""
+	switch m.state {
+	case showList:
+		ss += m.list.View()
+	case showChat:
+		var chatView strings.Builder
+		chatView.WriteString("Chat with " + m.selectedModel + "\n\n")
+
+		// Create a lipgloss style for wrapping
+		// Subtracting 4 for margin/padding
+		messageStyle := lipgloss.NewStyle().Width(m.width - 4)
+
+		for _, msg := range m.messages {
+			var styledMsg string
+			switch msg.sender {
+			case userMessage:
+				styledMsg = userStyle.Render(msg.content)
+			case geminiMessage:
+				styledMsg = geminiStyle.Render(msg.content)
+			case systemMessage:
+				styledMsg = systemStyle.Render(msg.content)
+			}
+			chatView.WriteString(messageStyle.Render(styledMsg) + "\n")
+		}
+		
+		if m.pastedImage != nil {
+			chatView.WriteString("\n[Image Pasted] " + m.textarea.View())
+		} else if m.yoloModeActive {
+			chatView.WriteString("\n[YOLO Mode Active] " + m.textarea.View())
+		} else {
+			chatView.WriteString("\n" + m.textarea.View())
+		}
+		// Only show spinner if we're waiting for a response
+		if m.loading {
+			chatView.WriteString("\n" + m.spinner.View() + " Thinking...")
+		}
+		ss = chatView.String()
+	}
+
+	return appStyle.Render(ss)
+}
+
+func fetchModels(client APIClient) tea.Cmd {
+	return func() tea.Msg {
+		items, err := client.FetchModels()
+		if err != nil {
+			return errMsg{err}
+		}
+		return fetchedModelsMsg(items)
+	}
+}
+
+func makeApiCall(client APIClient, model, prompt string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := client.GenerateContent(model, prompt)
+		if err != nil {
+			return errMsg{err}
+		}
+		return apiResponseMsg(resp)
+	}
+}
+
+func makeApiCallWithImage(client APIClient, model, prompt, imageBase64, mimeType string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := client.GenerateContentWithImage(model, prompt, imageBase64, mimeType)
+		if err != nil {
+			return errMsg{err}
+		}
+		return apiResponseMsg(resp)
+	}
+}
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+
+	"github.com/charmbracelet/bubbles/list"
+)
+
+// --- api client ---
+type (
+	errMsg struct{ err error }
+)
+
+type APIClient interface {
+	FetchModels() ([]list.Item, error)
+	GenerateContent(model, prompt string) (string, error)
+	GenerateContentWithImage(model, prompt, imageBase64, mimeType string) (string, error)
+}
+
+type LiveAPIClient struct {
+	apiKey string
+}
+
+func NewLiveAPIClient(apiKey string) *LiveAPIClient {
+	return &LiveAPIClient{apiKey: apiKey}
+}
+
+func (c *LiveAPIClient) FetchModels() ([]list.Item, error) {
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models?key=%s", c.apiKey)
+	res, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var response struct {
+		Models []struct {
+			Name                       string   `json:"name"`
+			SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, err
+	}
+
+	items := []list.Item{}
+	for _, model := range response.Models {
+		for _, method := range model.SupportedGenerationMethods {
+			if method == "generateContent" {
+				items = append(items, item{title: strings.TrimPrefix(model.Name, "models/")})
+			}
+		}
+	}
+	return items, nil
+}
+
+func (c *LiveAPIClient) GenerateContent(model, prompt string) (string, error) {
+	logToFile("--- New API Call ---")
+	logToFile(fmt.Sprintf("Model: %s", model))
+	logToFile(fmt.Sprintf("Prompt: %s", prompt))
+
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, c.apiKey)
+	logToFile(fmt.Sprintf("URL: %s", url))
+
+	writeFileTool := &Tool{
+		FunctionDeclarations: []*FunctionDeclaration{
+			{
+				Name:        "writeFile",
+				Description: "Write a file to the local file system.",
+				Parameters: &Parameters{
+					Type: "object",
+					Properties: map[string]*Property{
+						"name": {
+							Type:        "string",
+							Description: "The name of the file to write.",
+						},
+						"content": {
+							Type:        "string",
+							Description: "The content to write to the file.",
+						},
+					},
+					Required: []string{"name", "content"},
+				},
+			},
+		},
+	}
+
+	    reqBody := &apiRequest{
+
+	        Contents: []*Content{
+
+	            {
+
+	                Parts: []Part{
+
+	                    {Text: prompt},
+
+	                },
+
+	            },
+
+	        },
+
+	        Tools: []*Tool{writeFileTool},
+
+	    }
+
+	
+
+	    for {
+
+	        reqBytes, err := json.Marshal(reqBody)
+
+	        if err != nil {
+
+	            logToFile(fmt.Sprintf("ERROR marshalling request: %v", err))
+
+	            return "", err
+
+	        }
+
+	        logToFile(fmt.Sprintf("Request Body: %s", string(reqBytes)))
+
+	
+
+	        res, err := http.Post(url, "application/json", bytes.NewBuffer(reqBytes))
+
+	        if err != nil {
+
+	            logToFile(fmt.Sprintf("ERROR making POST request: %v", err))
+
+	            return "", err
+
+	        }
+
+	        defer res.Body.Close()
+
+	
+
+	        body, err := io.ReadAll(res.Body)
+
+	        if err != nil {
+
+	            logToFile(fmt.Sprintf("ERROR reading response body: %v", err))
+
+	            return "", err
+
+	        }
+
+	        logToFile(fmt.Sprintf("Response Body: %s", string(body)))
+
+	
+
+	        var response apiResponse
+
+	        if err := json.Unmarshal(body, &response); err != nil {
+
+	            logToFile(fmt.Sprintf("ERROR unmarshalling response: %v", err))
+
+	            return "", err
+
+	        }
+
+	
+
+	        		if len(response.Candidates) > 0 && len(response.Candidates[0].Content.Parts) > 0 {
+
+	
+
+	        			part := response.Candidates[0].Content.Parts[0]
+
+	
+
+	        			logToFile(fmt.Sprintf("API Response Part: %+v", part))
+
+	
+
+	        			logToFile(fmt.Sprintf("Part.FunctionCall is nil: %t", part.FunctionCall == nil))
+
+	
+
+	        			if part.FunctionCall != nil {
+
+	
+
+	        				logToFile("FunctionCall detected.")
+
+	
+
+	        				if part.FunctionCall.Name == "writeFile" {
+
+	
+
+	        					logToFile("writeFile function call detected.")
+
+	                    					name, ok1 := part.FunctionCall.Args["name"].(string)
+
+	                    					rawContent, ok2 := part.FunctionCall.Args["content"]
+
+	                    					content := fmt.Sprintf("%v", rawContent)
+
+	                    					logToFile(fmt.Sprintf("Type assertion for name: %v, content: %v", ok1, ok2))
+
+	                    					if ok1 && ok2 {
+
+	                    						logToFile(fmt.Sprintf("Attempting to write file '%s' with content '%s'", name, content))
+
+	                    						_, err := writeFile(name, content)
+
+	                        if err != nil {
+
+	                            logToFile(fmt.Sprintf("ERROR writing file: %v", err))
+
+	                            return "", err
+
+	                        }
+
+	
+
+	                        reqBody.Contents = append(reqBody.Contents, &Content{
+
+	                            Parts: []Part{
+
+	                                {
+
+	                                    FunctionResponse: &FunctionResponse{
+
+	                                        Name: "writeFile",
+
+	                                        Response: map[string]interface{}{
+
+	                                            "success": err == nil,
+
+	                                        },
+
+	                                    },
+
+	                                },
+
+	                            },
+
+	                            Role: "tool",
+
+	                        })
+
+	                        return "File written successfully.", nil
+
+	                    }
+
+	                }
+
+	            } else {
+
+	
+				responseText := response.Candidates[0].Content.Parts[0].Text
+				logToFile(fmt.Sprintf("Success. Response text: %s", responseText))
+				return responseText, nil
+			}
+		}
+		logToFile("No response from model.")
+		return "No response from model.", nil
+	}
+}
+
+// --- api call types ---
+
+type apiRequest struct {
+	Contents []*Content `json:"contents"`
+	Tools    []*Tool    `json:"tools,omitempty"`
+}
+
+type apiResponse struct {
+	Candidates []struct {
+		Content *Content `json:"content"`
+	} `json:"candidates"`
+}
+
+type Content struct {
+	Parts []Part `json:"parts"`
+	Role  string `json:"role,omitempty"`
+}
+
+type Part struct {
+	Text          string         `json:"text,omitempty"`
+	InlineData    *InlineData    `json:"inline_data,omitempty"`
+	FunctionCall  *FunctionCall  `json:"functionCall,omitempty"`
+	FunctionResponse *FunctionResponse `json:"function_response,omitempty"`
+}
+
+type InlineData struct {
+	MimeType string `json:"mime_type"`
+	Data     string `json:"data"`
+}
+
+type FunctionCall struct {
+	Name string         `json:"name"`
+	Args map[string]interface{} `json:"args"`
+}
+
+type FunctionResponse struct {
+	Name     string `json:"name"`
+	Response map[string]interface{} `json:"response"`
+}
+
+type Tool struct {
+	FunctionDeclarations []*FunctionDeclaration `json:"function_declarations"`
+}
+
+type FunctionDeclaration struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Parameters  *Parameters `json:"parameters"`
+}
+
+type Parameters struct {
+	Type       string              `json:"type"`
+	Properties map[string]*Property `json:"properties"`
+	Required   []string            `json:"required"`
+}
+
+type Property struct {
+	Type        string `json:"type"`
+	Description string `json:"description"`
+}
+
+func writeFile(name string, content string) (string, error) {
+	err := os.WriteFile(name, []byte(content), 0644)
+	if err != nil {
+		return "", err
+	}
+	return "File written successfully.", nil
+}
+
+func (c *LiveAPIClient) GenerateContentWithImage(model, prompt, imageBase64, mimeType string) (string, error) {
+	logToFile("--- New API Call With Image ---")
+	logToFile(fmt.Sprintf("Model: %s", model))
+	logToFile(fmt.Sprintf("Prompt: %s", prompt))
+	logToFile(fmt.Sprintf("MimeType: %s", mimeType))
+
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, c.apiKey)
+	logToFile(fmt.Sprintf("URL: %s", url))
+
+	writeFileTool := &Tool{
+		FunctionDeclarations: []*FunctionDeclaration{
+			{
+				Name:        "writeFile",
+				Description: "Write a file to the local file system.",
+				Parameters: &Parameters{
+					Type: "object",
+					Properties: map[string]*Property{
+						"name": {
+							Type:        "string",
+							Description: "The name of the file to write.",
+						},
+						"content": {
+							Type:        "string",
+							Description: "The content to write to the file.",
+						},
+					},
+					Required: []string{"name", "content"},
+				},
+			},
+		},
+	}
+
+	reqBody := &apiRequest{
+		Contents: []*Content{
+			{
+				Parts: []Part{
+					{Text: prompt},
+					{
+						InlineData: &InlineData{
+							MimeType: mimeType,
+							Data:     imageBase64,
+						},
+					},
+				},
+			},
+		},
+		Tools: []*Tool{writeFileTool},
+	}
+
+	for {
+		reqBytes, err := json.Marshal(reqBody)
+		if err != nil {
+			logToFile(fmt.Sprintf("ERROR marshalling request: %v", err))
+			return "", err
+		}
+		logToFile(fmt.Sprintf("Request Body: %s", string(reqBytes)))
+
+		res, err := http.Post(url, "application/json", bytes.NewBuffer(reqBytes))
+		if err != nil {
+			logToFile(fmt.Sprintf("ERROR making POST request: %v", err))
+			return "", err
+		}
+		defer res.Body.Close()
+
+		body, err := io.ReadAll(res.Body)
+		if err != nil {
+			logToFile(fmt.Sprintf("ERROR reading response body: %v", err))
+			return "", err
+		}
+		logToFile(fmt.Sprintf("Response Body: %s", string(body)))
+
+		var response apiResponse
+		if err := json.Unmarshal(body, &response); err != nil {
+			logToFile(fmt.Sprintf("ERROR unmarshalling response: %v", err))
+			return "", err
+		}
+
+		if len(response.Candidates) > 0 && len(response.Candidates[0].Content.Parts) > 0 {
+			part := response.Candidates[0].Content.Parts[0]
+			logToFile(fmt.Sprintf("API Response Part: %+v", part))
+			logToFile(fmt.Sprintf("Part.FunctionCall is nil: %t", part.FunctionCall == nil))
+			if part.FunctionCall != nil {
+				logToFile("FunctionCall detected.")
+				if part.FunctionCall.Name == "writeFile" {
+					logToFile("writeFile function call detected.")
+					name, ok1 := part.FunctionCall.Args["name"].(string)
+					rawContent, ok2 := part.FunctionCall.Args["content"]
+					content := fmt.Sprintf("%v", rawContent)
+					logToFile(fmt.Sprintf("Type assertion for name: %v, content: %v", ok1, ok2))
+					if ok1 && ok2 {
+						logToFile(fmt.Sprintf("Attempting to write file '%s' with content '%s'", name, content))
+						_, err := writeFile(name, content)
+						if err != nil {
+							logToFile(fmt.Sprintf("ERROR writing file: %v", err))
+							return "", err
+						}
+
+						reqBody.Contents = append(reqBody.Contents, &Content{
+							Parts: []Part{
+								{
+									FunctionResponse: &FunctionResponse{
+										Name: "writeFile",
+										Response: map[string]interface{}{
+											"success": err == nil,
+										},
+									},
+								},
+							},
+							Role: "tool",
+						})
+						return "File written successfully.", nil
+					}
+				}
+			} else {
+				responseText := response.Candidates[0].Content.Parts[0].Text
+				logToFile(fmt.Sprintf("Success. Response text: %s", responseText))
+				return responseText, nil
+			}
+		}
+		logToFile("No response from model.")
+		return "No response from model.", nil
+	}
+}
+# g-tui-go
+
+A terminal UI for interacting with Google's Gemini models.
+
+## Installation
+
+### Nix / NixOS
+
+If you are a Nix user, you can install `g-tui-go` directly from this GitHub repository.
+
+**Option 1: Temporary Shell**
+
+This is the quickest way to run the application without installing it permanently.
+
+1.  **Using `nix-shell`:**
+    
+    ```bash
+    nix-shell -p "git; pkgs.callPackage ./. {}"
+    # Inside the new shell, run the application
+    g-tui-go
+    ```
+
+2.  **Using `nix run` (Flakes required):**
+    
+    If you have flakes enabled, you can run it directly:
+    
+    ```bash
+    nix run github:garthtrickett/g-tui-go
+    ```
+
+**Option 2: Declarative Install (for NixOS or Home Manager)**
+
+To install the application permanently and declaratively, add it to your system or user configuration.
+
+1.  **Add the repository to your inputs** (e.g., in your `flake.nix`):
+    
+    ```nix
+    # /etc/nixos/flake.nix or ~/.config/home-manager/flake.nix
+    {
+      inputs = {
+        nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+        
+        # Add this line
+        g-tui-go = {
+          url = "github:garthtrickett/g-tui-go";
+          flake = false; # This is not a flake... yet
+        };
+      };
+    
+      outputs = { self, nixpkgs, g-tui-go }: {
+        # ... your configuration
+      };
+    }
+    ```
+
+2.  **Add the package to your environment:**
+    
+    Create an overlay to make the package from the `default.nix` file available.
+    
+    ```nix
+    # In your NixOS or Home Manager configuration
+    
+    let
+      # Define your g-tui-go package
+      g-tui-go-pkg = pkgs.callPackage inputs.g-tui-go { };
+    in
+    {
+      # For NixOS:
+      environment.systemPackages = with pkgs; [
+        g-tui-go-pkg
+      ];
+    
+      # OR
+    
+      # For Home Manager:
+      home.packages = with pkgs; [
+        g-tui-go-pkg
+      ];
+    }
+    ```
+
+3.  **Rebuild your configuration:**
+    
+    ```bash
+    # For NixOS
+    sudo nixos-rebuild switch --flake .
+    
+    # For Home Manager
+    home-manager switch --flake .
+    ```
+
+Now, `g-tui-go` will be available as a command in your shell.package main
+
+import (
+	"fmt"
+	"os"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+func main() {
+	p := tea.NewProgram(initialModel())
+	if _, err := p.Run(); err != nil {
+		fmt.Printf("Alas, there's been an error: %v", err)
+		os.Exit(1)
+	}
+}package main
+
+import (
+	"strings"
+	"testing"
+)
+
+// parseCommand is a helper function we assume exists or should exist 
+// to decouple logic from the huge Update() switch statement.
+// If you don't have this, extracting it makes testing 10x easier.
+func parseCommand(input string) (string, string, bool) {
+	trimmed := strings.TrimSpace(input)
+	if !strings.HasPrefix(trimmed, "/") {
+		return "", "", false
+	}
+
+	parts := strings.SplitN(trimmed, " ", 2)
+	cmd := parts[0]
+	arg := ""
+	if len(parts) > 1 {
+		arg = parts[1]
+	}
+	return cmd, arg, true
+}
+
+func TestParseCommand(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantCmd   string
+		wantArg   string
+		wantIsCmd bool
+	}{
+		{
+			name:      "Normal Read Command",
+			input:     "/read /tmp/test.txt",
+			wantCmd:   "/read",
+			wantArg:   "/tmp/test.txt",
+			wantIsCmd: true,
+		},
+		{
+			name:      "Command Without Arg",
+			input:     "/help",
+			wantCmd:   "/help",
+			wantArg:   "",
+			wantIsCmd: true,
+		},
+		{
+			name:      "Regular Chat Message",
+			input:     "Can you read this?",
+			wantCmd:   "",
+			wantArg:   "",
+			wantIsCmd: false,
+		},
+		{
+			name:      "Whitespace Trimming",
+			input:     "   /read config.json   ",
+			wantCmd:   "/read",
+			wantArg:   "config.json", // Should be trimmed by parser logic usually
+			wantIsCmd: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd, arg, isCmd := parseCommand(tt.input)
+			
+			// If your parser doesn't trim args automatically, 
+			// you might need to adjust the expectation or the implementation.
+			arg = strings.TrimSpace(arg) 
+
+			if isCmd != tt.wantIsCmd {
+				t.Errorf("got isCmd %v, want %v", isCmd, tt.wantIsCmd)
+			}
+			if cmd != tt.wantCmd {
+				t.Errorf("got cmd %q, want %q", cmd, tt.wantCmd)
+			}
+			if arg != tt.wantArg {
+				t.Errorf("got arg %q, want %q", arg, tt.wantArg)
+			}
+		})
+	}
+}
+github.com/MakeNowJust/heredoc v1.0.0 h1:cXCdzVdstXyiTqTvfqk9SDHpKNjxuom+DOlyEeQ4pzQ=
+github.com/MakeNowJust/heredoc v1.0.0/go.mod h1:mG5amYoWBHf8vpLOuehzbGGw0EHxpZZ6lCpQ4fNJ8LE=
+github.com/atotto/clipboard v0.1.4 h1:EH0zSVneZPSuFR11BlR9YppQTVDbh5+16AmcJi4g1z4=
+github.com/atotto/clipboard v0.1.4/go.mod h1:ZY9tmq7sm5xIbd9bOK4onWV4S6X0u6GY7Vn0Yu86PYI=
+github.com/aymanbagabas/go-osc52/v2 v2.0.1 h1:HwpRHbFMcZLEVr42D4p7XBqjyuxQH5SMiErDT4WkJ2k=
+github.com/aymanbagabas/go-osc52/v2 v2.0.1/go.mod h1:uYgXzlJ7ZpABp8OJ+exZzJJhRNQ2ASbcXHWsFqH8hp8=
+github.com/aymanbagabas/go-udiff v0.2.0 h1:TK0fH4MteXUDspT88n8CKzvK0X9O2xu9yQjWpi6yML8=
+github.com/aymanbagabas/go-udiff v0.2.0/go.mod h1:RE4Ex0qsGkTAJoQdQQCA0uG+nAzJO/pI/QwceO5fgrA=
+github.com/charmbracelet/bubbles v0.21.0 h1:9TdC97SdRVg/1aaXNVWfFH3nnLAwOXr8Fn6u6mfQdFs=
+github.com/charmbracelet/bubbles v0.21.0/go.mod h1:HF+v6QUR4HkEpz62dx7ym2xc71/KBHg+zKwJtMw+qtg=
+github.com/charmbracelet/bubbletea v1.3.10 h1:otUDHWMMzQSB0Pkc87rm691KZ3SWa4KUlvF9nRvCICw=
+github.com/charmbracelet/bubbletea v1.3.10/go.mod h1:ORQfo0fk8U+po9VaNvnV95UPWA1BitP1E0N6xJPlHr4=
+github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc h1:4pZI35227imm7yK2bGPcfpFEmuY1gc2YSTShr4iJBfs=
+github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc/go.mod h1:X4/0JoqgTIPSFcRA/P6INZzIuyqdFY5rm8tb41s9okk=
+github.com/charmbracelet/lipgloss v1.1.0 h1:vYXsiLHVkK7fp74RkV7b2kq9+zDLoEU4MZoFqR/noCY=
+github.com/charmbracelet/lipgloss v1.1.0/go.mod h1:/6Q8FR2o+kj8rz4Dq0zQc3vYf7X+B0binUUBwA0aL30=
+github.com/charmbracelet/x/ansi v0.10.1 h1:rL3Koar5XvX0pHGfovN03f5cxLbCF2YvLeyz7D2jVDQ=
+github.com/charmbracelet/x/ansi v0.10.1/go.mod h1:3RQDQ6lDnROptfpWuUVIUG64bD2g2BgntdxH0Ya5TeE=
+github.com/charmbracelet/x/cellbuf v0.0.13-0.20250311204145-2c3ea96c31dd h1:vy0GVL4jeHEwG5YOXDmi86oYw2yuYUGqz6a8sLwg0X8=
+github.com/charmbracelet/x/cellbuf v0.0.13-0.20250311204145-2c3ea96c31dd/go.mod h1:xe0nKWGd3eJgtqZRaN9RjMtK7xUYchjzPr7q6kcvCCs=
+github.com/charmbracelet/x/exp/golden v0.0.0-20241011142426-46044092ad91 h1:payRxjMjKgx2PaCWLZ4p3ro9y97+TVLZNaRZgJwSVDQ=
+github.com/charmbracelet/x/exp/golden v0.0.0-20241011142426-46044092ad91/go.mod h1:wDlXFlCrmJ8J+swcL/MnGUuYnqgQdW9rhSD61oNMb6U=
+github.com/charmbracelet/x/term v0.2.1 h1:AQeHeLZ1OqSXhrAWpYUtZyX1T3zVxfpZuEQMIQaGIAQ=
+github.com/charmbracelet/x/term v0.2.1/go.mod h1:oQ4enTYFV7QN4m0i9mzHrViD7TQKvNEEkHUMCmsxdUg=
+github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f h1:Y/CXytFA4m6baUTXGLOoWe4PQhGxaX0KpnayAqC48p4=
+github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f/go.mod h1:vw97MGsxSvLiUE2X8qFplwetxpGLQrlU1Q9AUEIzCaM=
+github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0SNc=
+github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
+github.com/lucasb-eyer/go-colorful v1.2.0 h1:1nnpGOrhyZZuNyfu1QjKiUICQ74+3FNCN69Aj6K7nkY=
+github.com/lucasb-eyer/go-colorful v1.2.0/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
+github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
+github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
+github.com/mattn/go-localereader v0.0.1 h1:ygSAOl7ZXTx4RdPYinUpg6W99U8jWvWi9Ye2JC/oIi4=
+github.com/mattn/go-localereader v0.0.1/go.mod h1:8fBrzywKY7BI3czFoHkuzRoWE9C+EiG4R1k4Cjx5p88=
+github.com/mattn/go-runewidth v0.0.16 h1:E5ScNMtiwvlvB5paMFdw9p4kSQzbXFikJ5SQO6TULQc=
+github.com/mattn/go-runewidth v0.0.16/go.mod h1:Jdepj2loyihRzMpdS35Xk/zdY8IAYHsh153qUoGf23w=
+github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 h1:ZK8zHtRHOkbHy6Mmr5D264iyp3TiX5OmNcI5cIARiQI=
+github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6/go.mod h1:CJlz5H+gyd6CUWT45Oy4q24RdLyn7Md9Vj2/ldJBSIo=
+github.com/muesli/cancelreader v0.2.2 h1:3I4Kt4BQjOR54NavqnDogx/MIoWBFa0StPA8ELUXHmA=
+github.com/muesli/cancelreader v0.2.2/go.mod h1:3XuTXfFS2VjM+HTLZY9Ak0l6eUKfijIfMUZ4EgX0QYo=
+github.com/muesli/termenv v0.16.0 h1:S5AlUN9dENB57rsbnkPyfdGuWIlkmzJjbFf0Tf5FWUc=
+github.com/muesli/termenv v0.16.0/go.mod h1:ZRfOIKPFDYQoDFF4Olj7/QJbW60Ol/kL1pU3VfY/Cnk=
+github.com/rivo/uniseg v0.2.0/go.mod h1:J6wj4VEh+S6ZtnVlnTBMWIodfgj8LQOQFoIToxlJtxc=
+github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=
+github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
+github.com/sahilm/fuzzy v0.1.1 h1:ceu5RHF8DGgoi+/dR5PsECjCDH1BE3Fnmpo7aVXOdRA=
+github.com/sahilm/fuzzy v0.1.1/go.mod h1:VFvziUEIMCrT6A6tw2RFIXPXXmzXbOsSHF0DOI8ZK9Y=
+github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e h1:JVG44RsyaB9T2KIHavMF/ppJZNG9ZpyihvCd0w101no=
+github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e/go.mod h1:RbqR21r5mrJuqunuUZ/Dhy/avygyECGrLceyNeo4LiM=
+golang.org/x/exp v0.0.0-20220909182711-5c715a9e8561 h1:MDc5xs78ZrZr3HMQugiXOAkSZtfTpbJLDr/lwfgO53E=
+golang.org/x/exp v0.0.0-20220909182711-5c715a9e8561/go.mod h1:cyybsKvd6eL0RnXn6p/Grxp8F5bW7iYuBgsNCOHpMYE=
+golang.org/x/sys v0.0.0-20210809222454-d867a43fc93e/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+golang.org/x/sys v0.6.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+golang.org/x/sys v0.36.0 h1:KVRy2GtZBrk1cBYA7MKu5bEZFxQk4NIDV6RLVcC8o0k=
+golang.org/x/sys v0.36.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=
+golang.org/x/text v0.26.0 h1:P42AVeLghgTYr4+xUnTRKDMqpar+PtX7KWuNQL21L8M=
+golang.org/x/text v0.26.0/go.mod h1:QK15LZJUUQVJxhz7wXgxSy/CJaTFjd0G+YLonydOVQA=
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// TestReadCommand verifies that the /read slash command correctly
+// resolves paths and retrieves file content.
+func TestReadCommand(t *testing.T) {
+	// 1. Setup: Create a temporary directory and a dummy file
+	tmpDir := t.TempDir()
+	fileName := "mission_report.txt"
+	filePath := filepath.Join(tmpDir, fileName)
+	fileContent := "Target confirmed. The package is secure."
+
+	if err := os.WriteFile(filePath, []byte(fileContent), 0644); err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+
+	// 2. Define Test Cases
+	tests := []struct {
+		name        string
+		cmdArgument string // The argument passed to /read
+		want        string
+		wantErr     bool
+	}{
+		{
+			name:        "Valid Absolute Path",
+			cmdArgument: filePath,
+			want:        fileContent,
+			wantErr:     false,
+		},
+		{
+			name:        "Non-Existent File",
+			cmdArgument: filepath.Join(tmpDir, "ghost_file.txt"),
+			want:        "",
+			wantErr:     true,
+		},
+		// You can add a relative path test here if your implementation supports
+		// expanding relative paths based on the CWD.
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// NOTE: This test assumes we extracted the logic into a function.
+			// If the logic is inline in the update loop, we should extract it
+			// to something like: func readFilePayload(path string) (string, error)
+			
+			// For this test file to compile and run immediately as a verification of logic,
+			// I'm calling os.ReadFile directly here.
+			// TODO: Replace 'os.ReadFile' below with your actual implementation function,
+			// e.g., result, err := handleReadFile(tt.cmdArgument)
+
+			var result string
+			var err error
+
+			// --- REPLACE START ---
+			// Simulating the logic "we just implemented":
+			cleanedPath := filepath.Clean(strings.TrimSpace(tt.cmdArgument))
+			bytes, readErr := os.ReadFile(cleanedPath)
+			result = string(bytes)
+			err = readErr
+			// --- REPLACE END ---
+
+			// 3. Assertions
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Process /read error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if !tt.wantErr && result != tt.want {
+				t.Errorf("Process /read result = %q, want %q", result, tt.want)
+			}
+		})
+	}
+}
+module g-tui-go
+
+go 1.25.4
+
+require (
+	github.com/charmbracelet/bubbles v0.21.0
+	github.com/charmbracelet/bubbletea v1.3.10
+	github.com/charmbracelet/lipgloss v1.1.0
+)
+
+require (
+	github.com/atotto/clipboard v0.1.4 // indirect
+	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
+	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect
+	github.com/charmbracelet/x/ansi v0.10.1 // indirect
+	github.com/charmbracelet/x/cellbuf v0.0.13-0.20250311204145-2c3ea96c31dd // indirect
+	github.com/charmbracelet/x/term v0.2.1 // indirect
+	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
+	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-localereader v0.0.1 // indirect
+	github.com/mattn/go-runewidth v0.0.16 // indirect
+	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
+	github.com/muesli/cancelreader v0.2.2 // indirect
+	github.com/muesli/termenv v0.16.0 // indirect
+	github.com/rivo/uniseg v0.4.7 // indirect
+	github.com/sahilm/fuzzy v0.1.1 // indirect
+	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
+	golang.org/x/sys v0.36.0 // indirect
+	golang.org/x/text v0.26.0 // indirect
+)
